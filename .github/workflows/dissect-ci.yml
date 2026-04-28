@@ -1,0 +1,95 @@
+name: Dissect CI
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: fox-it/dissect-workflow-templates/.github/actions/git-checkout@main
+
+      - uses: fox-it/dissect-workflow-templates/.github/actions/tox-run@main
+        with:
+          tox-environment: build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: dist/*
+          retention-days: 1
+
+  lint:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: fox-it/dissect-workflow-templates/.github/actions/git-checkout@main
+
+      - uses: fox-it/dissect-workflow-templates/.github/actions/tox-run@main
+        with:
+          tox-environment: lint
+
+  test:
+    needs: build
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.allow_failure }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-latest", "ubuntu-22.04-arm", "windows-latest", "windows-11-arm", "macos-latest", "macos-15-intel"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          - allow_failure: false
+            tox-version: "4.27.0"
+        exclude:
+          - os: "windows-11-arm"
+            python-version: "3.10"
+
+    steps:
+      - uses: fox-it/dissect-workflow-templates/.github/actions/git-checkout@main
+
+      - uses: fox-it/dissect-workflow-templates/.github/actions/tox-run@main
+        with:
+          tox-environment: ${{ matrix.python-version }}
+          runner-os: ${{ matrix.os }}
+          python-version: ${{ matrix.python-version }}
+
+      - uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.DISSECT_CODECOV_TOKEN }}
+          env_vars: PYTHON
+          files: coverage.xml
+          flags: unittests
+          verbose: true
+
+  docs-build:
+    needs: build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: fox-it/dissect-workflow-templates/.github/actions/git-checkout@main
+
+      - uses: fox-it/dissect-workflow-templates/.github/actions/tox-run@main
+        with:
+          tox-environment: docs-build
+
+  publish:
+    if: ${{ github.ref_name == 'main' || github.ref_type == 'tag' }}
+    needs: [test]
+    runs-on: ubuntu-latest
+    environment: dissect_publish
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: dist/
+      # According to the documentation, it automatically looks inside the `dist/` folder for packages.
+      - name: Publish package distributions to Pypi
+        uses: pypa/gh-action-pypi-publish@release/v1
